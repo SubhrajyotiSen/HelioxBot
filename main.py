@@ -7,7 +7,6 @@ import random
 import urllib
 import urllib2
 import cStringIO
-import json
 from bs4 import BeautifulSoup
 
 # for sending images
