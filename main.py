@@ -1,13 +1,14 @@
 import StringIO
 import sys
 sys.path.insert(0, 'libs')
-import json
 import logging
 import random
 import urllib
 import urllib2
 import cStringIO
+import json
 from bs4 import BeautifulSoup
+import html2text
 
 # for sending images
 from PIL import Image
@@ -22,7 +23,6 @@ import webapp2
 TOKEN = YOUR_BOT_API_KEY
 
 BASE_URL = 'https://api.telegram.org/bot' + TOKEN + '/'
-
 
 # ================================
 
@@ -91,27 +91,42 @@ class WebhookHandler(webapp2.RequestHandler):
             logging.info('no text')
             return
 
-        def reply(msg=None, img=None):
+        def reply(msg=None):
             if msg:
                 resp = urllib2.urlopen(BASE_URL + 'sendMessage', urllib.urlencode({
                     'chat_id': str(chat_id),
-                    'text': msg.encode('utf-8'),
+                    'text': msg ,
                     'disable_web_page_preview': 'true',
                     'reply_to_message_id': str(message_id),
                 })).read()
-            elif img:
-                resp = multipart.post_multipart(BASE_URL + 'sendPhoto', [
-                    ('chat_id', str(chat_id)),
-                    ('reply_to_message_id', str(message_id)),
-                ], [
-                    ('photo', 'image.jpg', img),
-                ])
             else:
                 logging.error('no msg or img specified')
                 resp = None
 
             logging.info('send response:')
             logging.info(resp)
+
+        def getSoup(url):
+            # required header
+            hdr = {'User-Agent':
+                   ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 '
+                    '(KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11'),
+                   'Accept':
+                   ('text/html,application/xhtml+xml,'
+                    'application/xml;q=0.9,*/*;q=0.8'),
+                   'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.3',
+                   'Accept-Encoding': 'none',
+                   'Accept-Language': 'en-US,en;q=0.8',
+                   'Connection': 'keep-alive'}
+            # configure reuqest
+            req = urllib2.Request(url, headers=hdr)
+            # open the URL and get the response
+            page = urllib2.urlopen(req)
+            # use HTML parser in the page response
+            soup = BeautifulSoup(page, "html.parser")
+            # return the parse HTML
+            return soup
+
 
         if text.startswith('/'):
             if text == '/start':
@@ -122,8 +137,6 @@ class WebhookHandler(webapp2.RequestHandler):
                 setEnabled(chat_id, False)
             elif text == '/help' :
                 reply('You can search for lyrics by entering the artist name followed by song name')
-            elif text == '/image' :
-                reply(img=urllib2.urlopen('https://unsplash.it/720/1080/?random').read())
 
         # CUSTOMIZE FROM HERE
 
@@ -133,36 +146,28 @@ class WebhookHandler(webapp2.RequestHandler):
             reply('look at the corner of your screen!')
         else:
             if getEnabled(chat_id):
+                link = None
                 text = text.strip();
                 textCopy = text.lower()
                 text = text.replace(' ','%20')
-                url = 'http://api.lyricsnmusic.com/songs?api_key=49dfa11af9c2fc5aa0085766477519&q='+text
-                hdr = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11',
-                   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                   'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.3',
-                   'Accept-Encoding': 'none',
-                   'Accept-Language': 'en-US,en;q=0.8',
-                   'Connection': 'keep-alive'}
-                req = urllib2.Request(url,headers=hdr)
-                page = urllib2.urlopen(req)
-                data = json.load(page)
-                data2 = 'null'
-                for i in range(len(data)):
-                    title = data[i]['title']
-                    title = title.lower()
-                    if title in textCopy:
-                        data2 = data[i]['url']
-                        node = '\n\nTitle : '+data[i]['title']
-                        node = node + '\n\nArtist : '+data[i]['artist']['name']
-                        break
-                if data2 == 'null':
-                    reply('Unable to find song')
+                 # generate the API request URL
+                url = 'http://search.azlyrics.com/search.php?q='+text
+                soup = getSoup(url)
+                # find divs with class 'panel'
+                segments = soup.body.findAll("div", {"class": "panel"})
+                # find the div that contains the song results
+                for segment in segments:
+                    if segment.find("div", "panel-heading").find("b").text == "Song results:":
+                        link = segment.find("td", {"class": "text-left visitedlyr"}).find("a")['href']
+                # if a song result is found
+                if link is not None:
+                    soup = getSoup(link)
+                    # get the lyrics
+                    lyrics = soup.body.find(
+                        "div", {"class": "col-xs-12 col-lg-8 text-center"}).findAll("div")[6].prettify()
+                    reply(html2text.html2text(lyrics).encode('ascii','ignore'))
                 else:
-                    req = urllib2.Request(data2,headers=hdr)
-                    page = urllib2.urlopen(req)
-                    soup = BeautifulSoup(page)
-                    node = node + '\n\n' + soup.body.pre.string
-                    reply(node)
+                    reply("Song not found")
 
             else:
                 logging.info('not enabled for chat_id {}'.format(chat_id))
